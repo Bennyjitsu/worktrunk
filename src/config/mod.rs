@@ -155,8 +155,8 @@ pub fn is_user_project_override_key(key: &str) -> bool {
         .any(|k| k == key)
 }
 
-/// Replace a key's inline-table value with a standard table, carrying the key's
-/// leading decor onto the table header.
+/// Replace a key's inline-table value with a standard table, carrying the line's
+/// comments onto the table header.
 ///
 /// The key was parsed from `merge = { … }`, so its leaf decor holds whatever
 /// preceded the line — comments, blank lines — plus the space before `=`. A
@@ -165,12 +165,16 @@ pub fn is_user_project_override_key(key: &str) -> bool {
 /// and the user's own comment is what breaks it. Move the prefix to the header
 /// and drop the rest.
 ///
+/// A trailing comment after the closing brace sits in the inline value's own
+/// decor, which `InlineTable::into_table` discards, so it is read from
+/// `existing` before the replacement and lands after the header's `]`. It is
+/// carried only when it holds a comment; bare whitespace there would just trail
+/// the header.
+///
 /// Both places that rewrite a table the user wrote inline go through here — the
 /// save-path merge in `user::persistence`, and `ensure_standard_table_parent`
 /// in `deprecation`, which has no choice but to convert because TOML forbids
-/// extending an inline table with a later subtable. The value's own decor (a
-/// trailing comment after the closing brace) is still dropped by
-/// `InlineTable::into_table`.
+/// extending an inline table with a later subtable.
 pub(crate) fn replace_inline_with_table(
     existing: &mut toml_edit::Table,
     key: &str,
@@ -183,6 +187,15 @@ pub(crate) fn replace_inline_with_table(
         .cloned();
     if let Some(prefix) = prefix {
         table.decor_mut().set_prefix(prefix);
+    }
+    let suffix = existing
+        .get(key)
+        .and_then(|item| item.as_inline_table())
+        .and_then(|inline| inline.decor().suffix())
+        .filter(|suffix| suffix.as_str().is_some_and(|s| s.contains('#')))
+        .cloned();
+    if let Some(suffix) = suffix {
+        table.decor_mut().set_suffix(suffix);
     }
     if let Some(mut key_mut) = existing.key_mut(key) {
         key_mut.leaf_decor_mut().clear();

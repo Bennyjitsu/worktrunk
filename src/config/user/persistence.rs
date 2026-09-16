@@ -102,13 +102,35 @@ impl UserConfig {
                 }
                 Some(existing_item) => {
                     if !Self::items_equal(existing_item, desired_item) {
-                        *existing_item = desired_item.clone();
+                        Self::replace_keeping_decor(existing_item, desired_item);
                     }
                 }
                 None => {
                     existing[key] = desired_item.clone();
                 }
             }
+        }
+    }
+
+    /// Overwrite an item, keeping the value's own decor — the spacing after `=`
+    /// and the trailing comment after the value.
+    ///
+    /// Comments and blank lines *above* the line sit on the key's leaf decor,
+    /// which a value replacement never touches. The trailing comment sits on the
+    /// value, so replacing the item wholesale drops it: whenever a save changes
+    /// a value, and — since template-variable migration became `Structural` —
+    /// on a line the command never touched, because every load rewrites retired
+    /// names and the next unrelated mutation (declining the commit-generation
+    /// offer, say) finds that line changed. An inline table turning into a
+    /// standard one takes the other path, `replace_inline_with_table`, which
+    /// moves decor onto the header.
+    fn replace_keeping_decor(existing_item: &mut toml_edit::Item, desired_item: &toml_edit::Item) {
+        let decor = existing_item.as_value().map(|v| v.decor().clone());
+        *existing_item = desired_item.clone();
+        if let Some(decor) = decor
+            && let Some(value) = existing_item.as_value_mut()
+        {
+            *value.decor_mut() = decor;
         }
     }
 
