@@ -100,12 +100,16 @@ Prefer exit codes / `--porcelain` / `--json` over parsing human-readable message
 
 | Tool | Fragile | Structured |
 |------|---------|------------|
-| `git diff` | `--stat` (localized) | `--numstat`, `--shortstat` (`(+)`/`(-)` hardcoded) |
-| `git status` | default | `--porcelain=v2` |
+| `git diff-tree` / `diff-index` | `--stat` (localized) | `--numstat`, `--shortstat` (`(+)`/`(-)` hardcoded) |
+| `git status` | default | `--porcelain=v2 -z` |
 | `git merge-base` | error messages | exit codes |
 | `gh` / `glab` | default | `--json` |
 
 When no structured alternative exists, document the fragility inline.
+
+### Plumbing for Output `wt` Consumes
+
+Porcelain commands read display configuration that changes what they report: `diff.relative` once made `wt remove` delete an unmerged branch, and `color.ui=always` and `diff.external` leaked into LLM prompts. When `wt` parses, caches, renders, or prompts with git's output, it runs plumbing (`diff-tree`, `diff-index`, `diff-files`, `for-each-ref`), which ignores that configuration. Diffs go through `PreparedDiff::capture`, which restores the `git diff` defaults plumbing lacks. `git status` has no plumbing equivalent, so it pins its behavior with explicit flags. Output shown as git's own view, like `wt step diff`, stays porcelain.
 
 ### Immutable Ids Over List Positions
 
