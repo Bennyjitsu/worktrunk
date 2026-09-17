@@ -696,7 +696,7 @@ When called without arguments, `wt switch` opens an interactive picker to browse
 
 The CI column shows each row's PR/MR CI and review status, the same as [`wt list --full`](/list/).
 
-<!-- demo: wt-switch-picker.gif 1600x800 | Browsing the picker, scrolling a preview, filtering, and selecting -->
+<!-- demo: wt-switch-picker.gif 1600x900 | Alt-p to reveal the CI and summary columns as they fill in, then paging a diff, a PR's comment thread, and the PR itself -->
 **Keybindings:**
 
 | Key | Action |
@@ -2420,7 +2420,7 @@ Default template:
 ```toml
 [commit.generation]
 squash-template = """
-<task>Write a commit message for the combined effect of these commits.</task>
+<task>Write a commit message for the change in <diff>, which is everything the squash will record. <commits> lists what it folds in.</task>
 
 <format>
 - Subject line under 50 chars
