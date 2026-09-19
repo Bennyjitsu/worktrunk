@@ -74,6 +74,7 @@ pub fn handle_squash(
     stage: Option<StageMode>,
     announcer: &mut HookAnnouncer<'_>,
     pre_approved_guidance: PreApprovedGuidance,
+    author: Option<&str>,
 ) -> anyhow::Result<SquashResult> {
     // Load config once, run LLM setup prompt, then reuse config
     let mut config = UserConfig::load().context("Failed to load config")?;
@@ -206,7 +207,7 @@ pub fn handle_squash(
             sha,
             message,
             stage_mode,
-        } = generator.commit_staged_changes(&wt, true, true, stage_mode)?;
+        } = generator.commit_staged_changes(&wt, true, true, stage_mode, author)?;
         return Ok(SquashResult::Squashed {
             sha,
             message,
@@ -297,6 +298,11 @@ pub fn handle_squash(
     let formatted_message = generator.format_message_for_display(&commit_message);
     eprintln!("{}", format_with_gutter(&formatted_message, None));
 
+    // Capture the pre-reset tip so a commit failure below (e.g. blocked by a
+    // pre-commit hook) can be rolled back to instead of leaving the branch's
+    // original commits collapsed into anonymous staged changes.
+    let pre_reset_sha = repo.run_command(&["rev-parse", "HEAD"])?.trim().to_string();
+
     // Reset to merge base (soft reset stages all changes, including any already-staged uncommitted changes)
     //
     // TOCTOU note: Between this reset and the commit below, an external process could
@@ -319,8 +325,18 @@ pub fn handle_squash(
     }
 
     // Commit with the generated message
-    repo.run_command(&["commit", "-m", &commit_message])
-        .context("Failed to create squash commit")?;
+    let mut commit_args = vec!["commit", "-m", commit_message.as_str()];
+    if let Some(author) = author {
+        commit_args.push("--author");
+        commit_args.push(author);
+    }
+    if let Err(err) = repo.run_command(&commit_args) {
+        // Undo the soft reset so a blocked/failed commit leaves the original
+        // per-author commits intact rather than collapsed into staged changes.
+        repo.run_command(&["reset", "--soft", &pre_reset_sha])
+            .context("Failed to create squash commit, and failed to restore original commits")?;
+        return Err(err).context("Failed to create squash commit (original commits restored)");
+    }
 
     // Full SHA for the JSON payload, abbreviated form for the success line.
     let commit_sha = repo.run_command(&["rev-parse", "HEAD"])?.trim().to_string();

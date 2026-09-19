@@ -215,6 +215,7 @@ fn handle_step_command(
                 args.stage,
                 args.show_prompt,
                 args.dry_run,
+                args.author,
             )?;
             if format == SwitchFormat::Json
                 && let Some(outcome) = outcome
@@ -257,6 +258,7 @@ fn handle_step_command(
                     args.stage,
                     &mut announcer,
                     commands::PreApprovedGuidance::RunOwnGate,
+                    args.author.as_deref(),
                 )?;
                 announcer.flush()?;
                 if format == SwitchFormat::Json {
@@ -902,6 +904,7 @@ fn handle_merge_command(args: MergeArgs, yes: bool) -> anyhow::Result<()> {
         yes,
         stage: args.stage,
         format: args.format,
+        author: args.author.as_deref(),
     })
 }
 
