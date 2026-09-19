@@ -71,7 +71,7 @@ pub struct CommitOptions<'a> {
     pub guidance: super::step::PreApprovedGuidance,
     /// Explicit `--author` override (`Name <email>`), forwarded to `git
     /// commit --author`. `None` uses git's ambient identity.
-    pub author: Option<String>,
+    pub author: Option<&'a str>,
 }
 
 impl<'a> CommitOptions<'a> {
@@ -292,7 +292,7 @@ impl CommitOptions<'_> {
                 true, // show_progress
                 self.show_no_squash_note,
                 self.stage_mode,
-                self.author.as_deref(),
+                self.author,
             )?;
 
         // Register post-commit hooks onto the caller's announcer (respects --no-hooks).

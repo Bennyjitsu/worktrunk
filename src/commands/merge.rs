@@ -370,7 +370,7 @@ pub fn handle_merge(opts: MergeOptions<'_>) -> anyhow::Result<()> {
             options.stage_mode = stage_mode;
             options.show_no_squash_note = true;
             options.guidance = guidance.clone();
-            options.author = author.map(str::to_string);
+            options.author = author;
 
             let _ = options.commit(&mut announcer)?;
             true // Committed directly
@@ -452,7 +452,7 @@ pub fn handle_merge(opts: MergeOptions<'_>) -> anyhow::Result<()> {
     });
     if !ff {
         // Create a merge commit on the target branch via commit-tree + update-ref
-        handle_no_ff_merge(Some(&target_branch), operations, &current_branch)?;
+        handle_no_ff_merge(Some(&target_branch), operations, &current_branch, author)?;
     } else {
         // Fast-forward push to target branch
         handle_push(Some(&target_branch), PushKind::MergeFastForward, operations)?;

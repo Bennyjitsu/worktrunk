@@ -13,7 +13,7 @@ pub struct CommitArgs {
     #[arg(long)]
     pub(crate) stage: Option<crate::commands::commit::StageMode>,
 
-    /// Commit author (`Name <email>`), overriding the ambient git identity
+    /// Commit author (`Name <email>`); committer stays the ambient identity
     #[arg(long, value_parser = clap::builder::NonEmptyStringValueParser::new())]
     pub(crate) author: Option<String>,
 
@@ -47,7 +47,7 @@ pub struct SquashArgs {
     #[arg(long)]
     pub(crate) stage: Option<crate::commands::commit::StageMode>,
 
-    /// Commit author (`Name <email>`), overriding the ambient git identity
+    /// Commit author (`Name <email>`); committer stays the ambient identity
     #[arg(long, value_parser = clap::builder::NonEmptyStringValueParser::new())]
     pub(crate) author: Option<String>,
 

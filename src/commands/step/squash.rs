@@ -55,6 +55,23 @@ pub enum SquashResult {
     NoNetChanges,
 }
 
+/// Restore `pre_reset_sha` after a failure that struck after the squash's
+/// soft reset, so the original per-author commits survive intact instead of
+/// staying collapsed into anonymous staged changes. Chains the restore
+/// failure (if any) onto the original error so neither diagnostic is lost.
+fn restore_after_failed_reset(
+    repo: &Repository,
+    pre_reset_sha: &str,
+    err: anyhow::Error,
+) -> anyhow::Error {
+    match repo.run_command(&["reset", "--soft", pre_reset_sha]) {
+        Ok(_) => err.context("original commits restored"),
+        Err(rollback_err) => rollback_err
+            .context(err)
+            .context("original commits NOT restored"),
+    }
+}
+
 /// Handle shared squash workflow (used by `wt step squash` and `wt merge`)
 ///
 /// # Arguments
@@ -313,8 +330,14 @@ pub fn handle_squash(
     repo.run_command(&["reset", "--soft", &merge_base])
         .context("Failed to reset to merge base")?;
 
-    // Check if there are actually any changes to commit
-    if !wt.has_staged_changes()? {
+    // Check if there are actually any changes to commit. A failure in the
+    // check itself (not the "nothing staged" case below, which is a normal,
+    // intentional outcome left as pre-existing behavior) is post-reset like
+    // the commit below, so it gets the same rollback.
+    let has_staged = wt
+        .has_staged_changes()
+        .map_err(|err| restore_after_failed_reset(repo, &pre_reset_sha, err))?;
+    if !has_staged {
         eprintln!(
             "{}",
             info_message(format!(
@@ -331,11 +354,11 @@ pub fn handle_squash(
         commit_args.push(author);
     }
     if let Err(err) = repo.run_command(&commit_args) {
-        // Undo the soft reset so a blocked/failed commit leaves the original
-        // per-author commits intact rather than collapsed into staged changes.
-        repo.run_command(&["reset", "--soft", &pre_reset_sha])
-            .context("Failed to create squash commit, and failed to restore original commits")?;
-        return Err(err).context("Failed to create squash commit (original commits restored)");
+        return Err(restore_after_failed_reset(
+            repo,
+            &pre_reset_sha,
+            err.context("Failed to create squash commit"),
+        ));
     }
 
     // Full SHA for the JSON payload, abbreviated form for the success line.

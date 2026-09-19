@@ -5621,3 +5621,227 @@ fn test_merge_retains_branch_checked_out_in_another_worktree(mut repo: TestRepo)
         "output should explain the branch was retained:\n{stderr}",
     );
 }
+
+// =============================================================================
+// --author flag
+// =============================================================================
+
+/// `--author` overrides commit authorship on `wt step squash`, while the
+/// committer stays the ambient identity (matching `git commit --author`'s
+/// own semantics: it only ever changes the author).
+#[rstest]
+fn test_step_squash_author_flag(repo_with_multi_commit_feature: TestRepo) {
+    let repo = &repo_with_multi_commit_feature;
+    let feature_wt = &repo.worktrees["feature"];
+
+    let ambient_committer = repo.git_output(&["log", "-1", "--format=%cn <%ce>", "feature"]);
+
+    let output = repo
+        .wt_command()
+        .args(["step", "squash", "--no-hooks", "--author", "Bot <bot@example.com>"])
+        .current_dir(feature_wt)
+        .env(
+            "WORKTRUNK_COMMIT__GENERATION__COMMAND",
+            "cat >/dev/null && echo 'squash: combined commits'",
+        )
+        .output()
+        .expect("wt step squash failed to spawn");
+    assert!(
+        output.status.success(),
+        "squash failed; stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    assert_eq!(
+        repo.git_output(&["log", "-1", "--format=%an <%ae>", "feature"]),
+        "Bot <bot@example.com>"
+    );
+    assert_eq!(
+        repo.git_output(&["log", "-1", "--format=%cn <%ce>", "feature"]),
+        ambient_committer,
+        "committer must stay the ambient identity"
+    );
+}
+
+/// `--author` overrides commit authorship on `wt step commit`.
+#[rstest]
+fn test_step_commit_author_flag(mut repo: TestRepo) {
+    let feature_wt = repo.add_worktree("feature");
+    fs::write(feature_wt.join("file1.txt"), "content 1").expect("Failed to write file");
+    repo.run_git_in(&feature_wt, &["add", "file1.txt"]);
+    repo.run_git_in(&feature_wt, &["commit", "-m", "feat: add file 1"]);
+
+    let ambient_committer = repo.git_output(&["log", "-1", "--format=%cn <%ce>", "feature"]);
+
+    fs::write(feature_wt.join("file2.txt"), "content 2").expect("Failed to write file");
+
+    let output = repo
+        .wt_command()
+        .args([
+            "step",
+            "commit",
+            "--branch",
+            "feature",
+            "--no-hooks",
+            "--author",
+            "Bot <bot@example.com>",
+        ])
+        .env(
+            "WORKTRUNK_COMMIT__GENERATION__COMMAND",
+            "cat >/dev/null && echo 'feat: mock message'",
+        )
+        .output()
+        .expect("wt step commit failed to spawn");
+    assert!(
+        output.status.success(),
+        "commit failed; stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    assert_eq!(
+        repo.git_output(&["log", "-1", "--format=%an <%ae>", "feature"]),
+        "Bot <bot@example.com>"
+    );
+    assert_eq!(
+        repo.git_output(&["log", "-1", "--format=%cn <%ce>", "feature"]),
+        ambient_committer,
+        "committer must stay the ambient identity"
+    );
+}
+
+/// `--author` overrides commit authorship on `wt merge`'s default
+/// squash-and-merge path.
+#[rstest]
+fn test_merge_author_flag(repo_with_multi_commit_feature: TestRepo) {
+    let repo = &repo_with_multi_commit_feature;
+    let feature_wt = &repo.worktrees["feature"];
+
+    let ambient_committer = repo.git_output(&["log", "-1", "--format=%cn <%ce>", "main"]);
+
+    let output = repo
+        .wt_command()
+        .args([
+            "merge",
+            "main",
+            "--no-hooks",
+            "--no-remove",
+            "--author",
+            "Bot <bot@example.com>",
+        ])
+        .current_dir(feature_wt)
+        .env(
+            "WORKTRUNK_COMMIT__GENERATION__COMMAND",
+            "cat >/dev/null && echo 'merge: squashed'",
+        )
+        .output()
+        .expect("wt merge failed to spawn");
+    assert!(
+        output.status.success(),
+        "merge failed; stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    assert_eq!(
+        repo.git_output(&["log", "-1", "--format=%an <%ae>", "main"]),
+        "Bot <bot@example.com>"
+    );
+    assert_eq!(
+        repo.git_output(&["log", "-1", "--format=%cn <%ce>", "main"]),
+        ambient_committer,
+        "committer must stay the ambient identity"
+    );
+}
+
+/// `--author` also covers the `--no-ff` merge-commit path, which `wt merge`
+/// builds directly via `git commit-tree` rather than `git commit` — a
+/// separate code path with no `--author` flag of its own (author is set via
+/// `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` instead). The committer stays
+/// ambient because only the author env vars are set.
+#[rstest]
+fn test_merge_no_ff_author_flag(repo_with_multi_commit_feature: TestRepo) {
+    let repo = &repo_with_multi_commit_feature;
+    let feature_wt = &repo.worktrees["feature"];
+
+    let ambient_committer = repo.git_output(&["log", "-1", "--format=%cn <%ce>", "main"]);
+
+    let output = repo
+        .wt_command()
+        .args([
+            "merge",
+            "main",
+            "--no-squash",
+            "--no-ff",
+            "--no-hooks",
+            "--no-remove",
+            "--author",
+            "Bot <bot@example.com>",
+        ])
+        .current_dir(feature_wt)
+        .output()
+        .expect("wt merge --no-ff failed to spawn");
+    assert!(
+        output.status.success(),
+        "merge --no-ff failed; stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    assert_eq!(
+        repo.git_output(&["log", "-1", "--format=%an <%ae>", "main"]),
+        "Bot <bot@example.com>"
+    );
+    assert_eq!(
+        repo.git_output(&["log", "-1", "--format=%cn <%ce>", "main"]),
+        ambient_committer,
+        "committer must stay the ambient identity"
+    );
+
+    let tree = repo.git_output(&["cat-file", "-p", "main"]);
+    let parent_count = tree.lines().filter(|l| l.starts_with("parent ")).count();
+    assert_eq!(
+        parent_count, 2,
+        "expected a real merge commit (2 parents), not a fast-forward"
+    );
+}
+
+/// A squash commit that fails at the git level — not a worktrunk pre-commit
+/// hook, which runs *before* the reset and so never exercises this path —
+/// must leave the branch's original per-commit history intact rather than
+/// collapsed into anonymous staged changes. An invalid `--author` spec is
+/// git's own commit-stage rejection ("not 'Name <email>'"), which fires
+/// exactly where a blocked/failed commit would.
+#[rstest]
+fn test_step_squash_failed_commit_restores_original_history(
+    repo_with_multi_commit_feature: TestRepo,
+) {
+    let repo = &repo_with_multi_commit_feature;
+    let feature_wt = &repo.worktrees["feature"];
+
+    let pre_squash_head = repo.git_output(&["rev-parse", "feature"]);
+    let original_log = repo.git_output(&["log", "--oneline", "main..feature"]);
+
+    let output = repo
+        .wt_command()
+        .args(["step", "squash", "--no-hooks", "--author", "not-an-ident"])
+        .current_dir(feature_wt)
+        .env(
+            "WORKTRUNK_COMMIT__GENERATION__COMMAND",
+            "cat >/dev/null && echo 'squash: combined commits'",
+        )
+        .output()
+        .expect("wt step squash failed to spawn");
+    assert!(
+        !output.status.success(),
+        "squash with an invalid --author should fail"
+    );
+
+    assert_eq!(
+        repo.git_output(&["rev-parse", "feature"]),
+        pre_squash_head,
+        "a failed squash commit must leave the branch tip unchanged"
+    );
+    assert_eq!(
+        repo.git_output(&["log", "--oneline", "main..feature"]),
+        original_log,
+        "the original per-commit history must survive a failed squash commit"
+    );
+}

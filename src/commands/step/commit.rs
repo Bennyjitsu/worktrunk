@@ -56,7 +56,7 @@ pub fn step_commit(
     options.hooks = hooks;
     options.stage_mode = stage_mode;
     options.show_no_squash_note = false;
-    options.author = author;
+    options.author = author.as_deref();
 
     let mut announcer = HookAnnouncer::new(ctx.repo, false);
     let outcome = options.commit(&mut announcer)?;

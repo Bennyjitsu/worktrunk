@@ -533,10 +533,24 @@ pub fn handle_push(
 /// of the feature tip, so the feature tree is the correct integration result.
 /// The source may be rebased or may retain an explicitly preserved
 /// merge-shaped graph.
+/// Split a `git commit --author`-style spec (`Name <email>`) into its parts.
+/// `commit-tree` has no `--author` flag, so its author identity is set via
+/// the separate `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` environment variables.
+fn split_author_spec(spec: &str) -> anyhow::Result<(&str, &str)> {
+    let (name, rest) = spec
+        .split_once('<')
+        .with_context(|| format!("Invalid --author \"{spec}\": expected `Name <email>`"))?;
+    let email = rest
+        .strip_suffix('>')
+        .with_context(|| format!("Invalid --author \"{spec}\": expected `Name <email>`"))?;
+    Ok((name.trim(), email.trim()))
+}
+
 pub fn handle_no_ff_merge(
     target: Option<&str>,
     operations: Option<MergeOperations>,
     feature_branch: &str,
+    author: Option<&str>,
 ) -> anyhow::Result<PushResult> {
     let ctx = MergeContext::prepare(target, operations)?;
 
@@ -579,9 +593,18 @@ pub fn handle_no_ff_merge(
     if ctx.repo.signs_commits()? {
         commit_tree_args.push("--gpg-sign");
     }
+    // `commit-tree` has no `--author` flag; author identity is read from
+    // `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` instead. Committer is left
+    // unset, so it falls through to the ambient identity, matching
+    // `git commit --author`'s own committer behavior.
+    let author_env = author.map(split_author_spec).transpose()?;
+    let env: &[(&str, &str)] = match &author_env {
+        Some((name, email)) => &[("GIT_AUTHOR_NAME", name), ("GIT_AUTHOR_EMAIL", email)],
+        None => &[],
+    };
     let merge_sha = ctx
         .repo
-        .run_command(&commit_tree_args)
+        .run_command_with_env(&commit_tree_args, env)
         .context("Failed to create merge commit")?
         .trim()
         .to_string();
