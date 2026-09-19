@@ -525,6 +525,27 @@ pub fn handle_push(
 // No-fast-forward merge
 // ---------------------------------------------------------------------------
 
+/// Split a `git commit --author`-style spec (`Name <email>`) into its parts.
+/// `commit-tree` has no `--author` flag, so its author identity is set via
+/// the separate `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` environment variables.
+///
+/// As lenient as `git commit --author` itself: takes the name up to the
+/// first `<` and the email up to the *first* `>` after it (matching git's
+/// own author-ident parser exactly, not just "closes eventually"), so
+/// trailing whitespace or junk after that closing `>` — including another
+/// literal `>` — doesn't reject a spec here that squash/commit already
+/// accepted earlier in the same `wt merge` run.
+fn split_author_spec(spec: &str) -> anyhow::Result<(&str, &str)> {
+    let invalid = || anyhow::anyhow!("Invalid --author \"{spec}\": expected `Name <email>`");
+    let (name, rest) = spec.split_once('<').ok_or_else(invalid)?;
+    let (email, _trailing) = rest.split_once('>').ok_or_else(invalid)?;
+    let (name, email) = (name.trim(), email.trim());
+    if name.is_empty() || email.is_empty() {
+        return Err(invalid());
+    }
+    Ok((name, email))
+}
+
 /// Merge to target branch using `--no-ff` (creates a merge commit).
 ///
 /// Uses git plumbing (`commit-tree` + [`advance_target`]) to create a merge
@@ -537,6 +558,7 @@ pub fn handle_no_ff_merge(
     target: Option<&str>,
     operations: Option<MergeOperations>,
     feature_branch: &str,
+    author: Option<&str>,
 ) -> anyhow::Result<PushResult> {
     let ctx = MergeContext::prepare(target, operations)?;
 
@@ -579,9 +601,18 @@ pub fn handle_no_ff_merge(
     if ctx.repo.signs_commits()? {
         commit_tree_args.push("--gpg-sign");
     }
+    // `commit-tree` has no `--author` flag; author identity is read from
+    // `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` instead. Committer is left
+    // unset, so it falls through to the ambient identity, matching
+    // `git commit --author`'s own committer behavior.
+    let author_env = author.map(split_author_spec).transpose()?;
+    let env: &[(&str, &str)] = match &author_env {
+        Some((name, email)) => &[("GIT_AUTHOR_NAME", name), ("GIT_AUTHOR_EMAIL", email)],
+        None => &[],
+    };
     let merge_sha = ctx
         .repo
-        .run_command(&commit_tree_args)
+        .run_command_with_env(&commit_tree_args, env)
         .context("Failed to create merge commit")?
         .trim()
         .to_string();
@@ -616,6 +647,38 @@ mod tests {
     use super::*;
     use crate::commands::worktree::types::MergeOperations;
     use worktrunk::testing::TestRepo;
+
+    #[test]
+    fn split_author_spec_matches_git_commit_authors_own_leniency() {
+        // As lenient as `git commit --author`: trailing whitespace or junk
+        // after the closing `>` doesn't reject a spec that squash/commit
+        // already accepted earlier in the same `wt merge --no-ff` run.
+        assert_eq!(
+            split_author_spec("Bot <bot@example.com>").unwrap(),
+            ("Bot", "bot@example.com")
+        );
+        assert_eq!(
+            split_author_spec("Bot <bot@example.com> ").unwrap(),
+            ("Bot", "bot@example.com")
+        );
+        assert_eq!(
+            split_author_spec("Bot <bot@example.com> extra").unwrap(),
+            ("Bot", "bot@example.com")
+        );
+        // git's ident parser closes at the *first* `>`, so a stray `>` in
+        // the trailing junk is discarded too, not folded into the email.
+        assert_eq!(
+            split_author_spec("Bot <bot@example.com> trailing >").unwrap(),
+            ("Bot", "bot@example.com")
+        );
+
+        assert!(split_author_spec("not-an-ident").is_err());
+        assert!(
+            split_author_spec("<bot@example.com>").is_err(),
+            "empty name"
+        );
+        assert!(split_author_spec("Bot <>").is_err(), "empty email");
+    }
 
     /// `advance_target` moves the branch and worktree together while leaving
     /// non-overlapping uncommitted changes — staged entries included — exactly

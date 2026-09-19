@@ -1897,6 +1897,18 @@ impl Repository {
         self.run_command_bounded(args, None)
     }
 
+    /// [`run_command`](Self::run_command), with additional environment
+    /// variables applied to the child. For `commit-tree`, which has no
+    /// `--author` flag and reads `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` from
+    /// the environment instead.
+    pub fn run_command_with_env(
+        &self,
+        args: &[&str],
+        env: &[(&str, &str)],
+    ) -> anyhow::Result<String> {
+        self.run_command_impl(args, None, env)
+    }
+
     /// [`run_command`](Self::run_command) with an optional wall-clock bound.
     ///
     /// A child still running when `timeout` expires is killed and the call
@@ -1912,6 +1924,17 @@ impl Repository {
         args: &[&str],
         timeout: Option<std::time::Duration>,
     ) -> anyhow::Result<String> {
+        self.run_command_impl(args, timeout, &[])
+    }
+
+    /// Shared implementation behind [`run_command_bounded`](Self::run_command_bounded)
+    /// and [`run_command_with_env`](Self::run_command_with_env).
+    fn run_command_impl(
+        &self,
+        args: &[&str],
+        timeout: Option<std::time::Duration>,
+        env: &[(&str, &str)],
+    ) -> anyhow::Result<String> {
         let mut cmd = self.with_object_store_env(
             Cmd::new("git")
                 .args(args.iter().copied())
@@ -1920,6 +1943,9 @@ impl Repository {
         );
         if let Some(timeout) = timeout {
             cmd = cmd.timeout(timeout);
+        }
+        for (key, val) in env {
+            cmd = cmd.env(key, val);
         }
 
         let output = cmd

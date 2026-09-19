@@ -21,6 +21,7 @@ pub fn step_commit(
     stage: Option<StageMode>,
     show_prompt: bool,
     dry_run: bool,
+    author: Option<String>,
 ) -> anyhow::Result<Option<CommitOutcome>> {
     // --show-prompt and --dry-run skip hooks and the commit itself; --dry-run still
     // mirrors --stage against a temp index so the previewed prompt matches what a real
@@ -55,6 +56,7 @@ pub fn step_commit(
     options.hooks = hooks;
     options.stage_mode = stage_mode;
     options.show_no_squash_note = false;
+    options.author = author.as_deref();
 
     let mut announcer = HookAnnouncer::new(ctx.repo, false);
     let outcome = options.commit(&mut announcer)?;

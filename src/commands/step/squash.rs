@@ -55,6 +55,23 @@ pub enum SquashResult {
     NoNetChanges,
 }
 
+/// Restore `pre_reset_sha` after a failure that struck after the squash's
+/// soft reset, so the original per-author commits survive intact instead of
+/// staying collapsed into anonymous staged changes. Chains the restore
+/// failure (if any) onto the original error so neither diagnostic is lost.
+fn restore_after_failed_reset(
+    repo: &Repository,
+    pre_reset_sha: &str,
+    err: anyhow::Error,
+) -> anyhow::Error {
+    match repo.run_command(&["reset", "--soft", pre_reset_sha]) {
+        Ok(_) => err.context("original commits restored"),
+        Err(rollback_err) => rollback_err
+            .context(err)
+            .context("original commits NOT restored"),
+    }
+}
+
 /// Handle shared squash workflow (used by `wt step squash` and `wt merge`)
 ///
 /// # Arguments
@@ -74,6 +91,7 @@ pub fn handle_squash(
     stage: Option<StageMode>,
     announcer: &mut HookAnnouncer<'_>,
     pre_approved_guidance: PreApprovedGuidance,
+    author: Option<&str>,
 ) -> anyhow::Result<SquashResult> {
     // Load config once, run LLM setup prompt, then reuse config
     let mut config = UserConfig::load().context("Failed to load config")?;
@@ -206,7 +224,7 @@ pub fn handle_squash(
             sha,
             message,
             stage_mode,
-        } = generator.commit_staged_changes(&wt, true, true, stage_mode)?;
+        } = generator.commit_staged_changes(&wt, true, true, stage_mode, author)?;
         return Ok(SquashResult::Squashed {
             sha,
             message,
@@ -297,6 +315,11 @@ pub fn handle_squash(
     let formatted_message = generator.format_message_for_display(&commit_message);
     eprintln!("{}", format_with_gutter(&formatted_message, None));
 
+    // Capture the pre-reset tip so a commit failure below (e.g. blocked by a
+    // pre-commit hook) can be rolled back to instead of leaving the branch's
+    // original commits collapsed into anonymous staged changes.
+    let pre_reset_sha = repo.run_command(&["rev-parse", "HEAD"])?.trim().to_string();
+
     // Reset to merge base (soft reset stages all changes, including any already-staged uncommitted changes)
     //
     // TOCTOU note: Between this reset and the commit below, an external process could
@@ -307,8 +330,14 @@ pub fn handle_squash(
     repo.run_command(&["reset", "--soft", &merge_base])
         .context("Failed to reset to merge base")?;
 
-    // Check if there are actually any changes to commit
-    if !wt.has_staged_changes()? {
+    // Check if there are actually any changes to commit. A failure in the
+    // check itself (not the "nothing staged" case below, which is a normal,
+    // intentional outcome left as pre-existing behavior) is post-reset like
+    // the commit below, so it gets the same rollback.
+    let has_staged = wt
+        .has_staged_changes()
+        .map_err(|err| restore_after_failed_reset(repo, &pre_reset_sha, err))?;
+    if !has_staged {
         eprintln!(
             "{}",
             info_message(format!(
@@ -319,8 +348,18 @@ pub fn handle_squash(
     }
 
     // Commit with the generated message
-    repo.run_command(&["commit", "-m", &commit_message])
-        .context("Failed to create squash commit")?;
+    let mut commit_args = vec!["commit", "-m", commit_message.as_str()];
+    if let Some(author) = author {
+        commit_args.push("--author");
+        commit_args.push(author);
+    }
+    if let Err(err) = repo.run_command(&commit_args) {
+        return Err(restore_after_failed_reset(
+            repo,
+            &pre_reset_sha,
+            err.context("Failed to create squash commit"),
+        ));
+    }
 
     // Full SHA for the JSON payload, abbreviated form for the success line.
     let commit_sha = repo.run_command(&["rev-parse", "HEAD"])?.trim().to_string();

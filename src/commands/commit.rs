@@ -69,6 +69,9 @@ pub struct CommitOptions<'a> {
     /// value supplied by the caller (`wt merge` resolves the guidance via
     /// `approve_commit_template_append` up front and passes it through).
     pub guidance: super::step::PreApprovedGuidance,
+    /// Explicit `--author` override (`Name <email>`), forwarded to `git
+    /// commit --author`. `None` uses git's ambient identity.
+    pub author: Option<&'a str>,
 }
 
 impl<'a> CommitOptions<'a> {
@@ -80,6 +83,7 @@ impl<'a> CommitOptions<'a> {
             stage_mode: StageMode::All,
             show_no_squash_note: false,
             guidance: super::step::PreApprovedGuidance::RunOwnGate,
+            author: None,
         }
     }
 }
@@ -141,6 +145,7 @@ impl<'a> CommitGenerator<'a> {
         show_progress: bool,
         show_no_squash_note: bool,
         stage_mode: StageMode,
+        author: Option<&str>,
     ) -> anyhow::Result<CommitOutcome> {
         // Fail early if nothing is staged (avoids confusing LLM prompt with empty diff)
         if !wt.has_staged_changes()? {
@@ -191,8 +196,12 @@ impl<'a> CommitGenerator<'a> {
         let formatted_message = self.format_message_for_display(&commit_message);
         eprintln!("{}", format_with_gutter(&formatted_message, None));
 
-        wt.run_command(&["commit", "-m", &commit_message])
-            .context("Failed to commit")?;
+        let mut commit_args = vec!["commit", "-m", commit_message.as_str()];
+        if let Some(author) = author {
+            commit_args.push("--author");
+            commit_args.push(author);
+        }
+        wt.run_command(&commit_args).context("Failed to commit")?;
 
         let commit_sha = wt.run_command(&["rev-parse", "HEAD"])?.trim().to_string();
         // Display uses `Repository::short_sha`; the JSON payload carries the full SHA.
@@ -283,6 +292,7 @@ impl CommitOptions<'_> {
                 true, // show_progress
                 self.show_no_squash_note,
                 self.stage_mode,
+                self.author,
             )?;
 
         // Register post-commit hooks onto the caller's announcer (respects --no-hooks).
