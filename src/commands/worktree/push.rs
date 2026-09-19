@@ -530,14 +530,15 @@ pub fn handle_push(
 /// the separate `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` environment variables.
 ///
 /// As lenient as `git commit --author` itself: takes the name up to the
-/// first `<` and the email up to the *last* `>`, so trailing whitespace or
-/// junk after the closing `>` (which git's own `--author` parsing accepts)
-/// doesn't reject a spec here that squash/commit already accepted earlier
-/// in the same `wt merge` run.
+/// first `<` and the email up to the *first* `>` after it (matching git's
+/// own author-ident parser exactly, not just "closes eventually"), so
+/// trailing whitespace or junk after that closing `>` — including another
+/// literal `>` — doesn't reject a spec here that squash/commit already
+/// accepted earlier in the same `wt merge` run.
 fn split_author_spec(spec: &str) -> anyhow::Result<(&str, &str)> {
     let invalid = || anyhow::anyhow!("Invalid --author \"{spec}\": expected `Name <email>`");
     let (name, rest) = spec.split_once('<').ok_or_else(invalid)?;
-    let (email, _trailing) = rest.rsplit_once('>').ok_or_else(invalid)?;
+    let (email, _trailing) = rest.split_once('>').ok_or_else(invalid)?;
     let (name, email) = (name.trim(), email.trim());
     if name.is_empty() || email.is_empty() {
         return Err(invalid());
@@ -662,6 +663,12 @@ mod tests {
         );
         assert_eq!(
             split_author_spec("Bot <bot@example.com> extra").unwrap(),
+            ("Bot", "bot@example.com")
+        );
+        // git's ident parser closes at the *first* `>`, so a stray `>` in
+        // the trailing junk is discarded too, not folded into the email.
+        assert_eq!(
+            split_author_spec("Bot <bot@example.com> trailing >").unwrap(),
             ("Bot", "bot@example.com")
         );
 
