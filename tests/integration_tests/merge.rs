@@ -5638,7 +5638,13 @@ fn test_step_squash_author_flag(repo_with_multi_commit_feature: TestRepo) {
 
     let output = repo
         .wt_command()
-        .args(["step", "squash", "--no-hooks", "--author", "Bot <bot@example.com>"])
+        .args([
+            "step",
+            "squash",
+            "--no-hooks",
+            "--author",
+            "Bot <bot@example.com>",
+        ])
         .current_dir(feature_wt)
         .env(
             "WORKTRUNK_COMMIT__GENERATION__COMMAND",

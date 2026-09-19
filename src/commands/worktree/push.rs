@@ -673,7 +673,10 @@ mod tests {
         );
 
         assert!(split_author_spec("not-an-ident").is_err());
-        assert!(split_author_spec("<bot@example.com>").is_err(), "empty name");
+        assert!(
+            split_author_spec("<bot@example.com>").is_err(),
+            "empty name"
+        );
         assert!(split_author_spec("Bot <>").is_err(), "empty email");
     }
 
