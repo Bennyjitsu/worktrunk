@@ -1033,12 +1033,19 @@ impl<'a> WorkingTree<'a> {
     /// Note: The index is per-worktree in git, so this checks this specific
     /// worktree's staging area.
     pub fn has_staged_changes(&self) -> anyhow::Result<bool> {
-        // Exit code 0 = no diff (no staged changes), exit code 1 = diff exists (has staged changes)
-        // run_command returns Ok on exit 0, Err on non-zero
-        // So: Err means has changes
-        Ok(self
-            .run_command(&["diff", "--cached", "--quiet", "--exit-code"])
-            .is_err())
+        // `git diff --cached --quiet --exit-code`: exit 0 = no diff (no staged
+        // changes), exit 1 = diff exists (has staged changes). Any other exit
+        // is a real git failure (corrupt index, etc.), not an answer to the
+        // question — propagate it rather than reporting "no changes" or
+        // silently reporting "has changes" as `run_command`'s Ok/Err split
+        // would (both non-zero exits collapse to Err there).
+        let args = ["diff", "--cached", "--quiet", "--exit-code"];
+        let output = self.run_command_output(&args)?;
+        match output.status.code() {
+            Some(0) => Ok(false),
+            Some(1) => Ok(true),
+            _ => Err(CommandError::from_failed_output("git", &args, &output).into()),
+        }
     }
 
     /// Check whether this worktree has initialized submodules.
@@ -1315,6 +1322,35 @@ mod tests {
         assert!(
             err.to_string().contains("Failed to read worktree lock"),
             "expected a lock-file IO error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn has_staged_changes_distinguishes_diff_from_a_real_git_failure() {
+        // `git diff --cached --quiet --exit-code` overloads its exit code:
+        // 0 = no diff, 1 = diff exists, anything else = a real failure that
+        // isn't an answer to "are there staged changes" at all. A corrupted
+        // index (here: replaced by a directory) reproduces that third case
+        // deterministically, without needing a real git bug.
+        let test = TestRepo::with_initial_commit();
+        let repo = Repository::at(test.root_path()).unwrap();
+        let wt = repo.worktree_at(test.root_path());
+
+        assert!(
+            !wt.has_staged_changes().unwrap(),
+            "a clean worktree has no staged changes"
+        );
+
+        let index_path = wt.git_dir().unwrap().join("index");
+        std::fs::remove_file(&index_path).unwrap();
+        std::fs::create_dir(&index_path).unwrap();
+
+        let err = wt
+            .has_staged_changes()
+            .expect_err("a corrupted index is a real failure, not \"no staged changes\"");
+        assert!(
+            err.to_string().to_lowercase().contains("git"),
+            "expected a git command failure, got: {err:?}"
         );
     }
 

@@ -337,7 +337,7 @@ pub fn validate_candidates(
                     false, // show_progress - already showing "Committing changes in..."
                     false, // show_no_squash_note
                     StageMode::None, // already staged above
-                    None,  // author - ambient identity, no --author override here
+                    None,
                 )?;
             } else {
                 // is_main without --commit

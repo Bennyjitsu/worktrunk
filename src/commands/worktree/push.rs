@@ -525,6 +525,26 @@ pub fn handle_push(
 // No-fast-forward merge
 // ---------------------------------------------------------------------------
 
+/// Split a `git commit --author`-style spec (`Name <email>`) into its parts.
+/// `commit-tree` has no `--author` flag, so its author identity is set via
+/// the separate `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` environment variables.
+///
+/// As lenient as `git commit --author` itself: takes the name up to the
+/// first `<` and the email up to the *last* `>`, so trailing whitespace or
+/// junk after the closing `>` (which git's own `--author` parsing accepts)
+/// doesn't reject a spec here that squash/commit already accepted earlier
+/// in the same `wt merge` run.
+fn split_author_spec(spec: &str) -> anyhow::Result<(&str, &str)> {
+    let invalid = || anyhow::anyhow!("Invalid --author \"{spec}\": expected `Name <email>`");
+    let (name, rest) = spec.split_once('<').ok_or_else(invalid)?;
+    let (email, _trailing) = rest.rsplit_once('>').ok_or_else(invalid)?;
+    let (name, email) = (name.trim(), email.trim());
+    if name.is_empty() || email.is_empty() {
+        return Err(invalid());
+    }
+    Ok((name, email))
+}
+
 /// Merge to target branch using `--no-ff` (creates a merge commit).
 ///
 /// Uses git plumbing (`commit-tree` + [`advance_target`]) to create a merge
@@ -533,19 +553,6 @@ pub fn handle_push(
 /// of the feature tip, so the feature tree is the correct integration result.
 /// The source may be rebased or may retain an explicitly preserved
 /// merge-shaped graph.
-/// Split a `git commit --author`-style spec (`Name <email>`) into its parts.
-/// `commit-tree` has no `--author` flag, so its author identity is set via
-/// the separate `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` environment variables.
-fn split_author_spec(spec: &str) -> anyhow::Result<(&str, &str)> {
-    let (name, rest) = spec
-        .split_once('<')
-        .with_context(|| format!("Invalid --author \"{spec}\": expected `Name <email>`"))?;
-    let email = rest
-        .strip_suffix('>')
-        .with_context(|| format!("Invalid --author \"{spec}\": expected `Name <email>`"))?;
-    Ok((name.trim(), email.trim()))
-}
-
 pub fn handle_no_ff_merge(
     target: Option<&str>,
     operations: Option<MergeOperations>,
@@ -639,6 +646,29 @@ mod tests {
     use super::*;
     use crate::commands::worktree::types::MergeOperations;
     use worktrunk::testing::TestRepo;
+
+    #[test]
+    fn split_author_spec_matches_git_commit_authors_own_leniency() {
+        // As lenient as `git commit --author`: trailing whitespace or junk
+        // after the closing `>` doesn't reject a spec that squash/commit
+        // already accepted earlier in the same `wt merge --no-ff` run.
+        assert_eq!(
+            split_author_spec("Bot <bot@example.com>").unwrap(),
+            ("Bot", "bot@example.com")
+        );
+        assert_eq!(
+            split_author_spec("Bot <bot@example.com> ").unwrap(),
+            ("Bot", "bot@example.com")
+        );
+        assert_eq!(
+            split_author_spec("Bot <bot@example.com> extra").unwrap(),
+            ("Bot", "bot@example.com")
+        );
+
+        assert!(split_author_spec("not-an-ident").is_err());
+        assert!(split_author_spec("<bot@example.com>").is_err(), "empty name");
+        assert!(split_author_spec("Bot <>").is_err(), "empty email");
+    }
 
     /// `advance_target` moves the branch and worktree together while leaving
     /// non-overlapping uncommitted changes — staged entries included — exactly

@@ -76,8 +76,9 @@ pub struct MergeOptions<'a> {
     pub stage: Option<super::commit::StageMode>,
     pub format: crate::cli::SwitchFormat,
     /// Explicit `--author` override (`Name <email>`), forwarded to the
-    /// commit/squash steps' `git commit --author`. `None` uses git's ambient
-    /// identity.
+    /// commit/squash steps' `git commit --author` and, for `--no-ff`, to the
+    /// `commit-tree` merge commit's `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL`.
+    /// `None` uses git's ambient identity.
     pub author: Option<&'a str>,
 }
 
