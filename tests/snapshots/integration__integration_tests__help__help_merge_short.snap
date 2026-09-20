@@ -50,14 +50,13 @@ Usage: [1m[36mwt merge[0m [36m[OPTIONS][0m [36m[TARGET][0m
   [36m[TARGET][0m  Target branch
 
 [1m[32mOptions:[0m
-      [1m[36m--no-squash[0m        Skip commit squashing
-      [1m[36m--no-commit[0m        Skip commit and squash
-      [1m[36m--no-rebase[0m        Skip rebase; require the target to fast-forward to the resulting tip
-      [1m[36m--no-remove[0m        Keep worktree after merge
-      [1m[36m--no-ff[0m            Create a merge commit (no fast-forward)
-      [1m[36m--stage[0m[36m [0m[36m<STAGE>[0m    What to stage before committing [default: all] [possible values: all, tracked, none]
-      [1m[36m--author[0m[36m [0m[36m<AUTHOR>[0m  Commit author ([1mName <email>[0m); committer stays the ambient identity
-  [1m[36m-h[0m, [1m[36m--help[0m             Print help (see more with '--help')
+      [1m[36m--no-squash[0m      Skip commit squashing
+      [1m[36m--no-commit[0m      Skip commit and squash
+      [1m[36m--no-rebase[0m      Skip rebase; require the target to fast-forward to the resulting tip
+      [1m[36m--no-remove[0m      Keep worktree after merge
+      [1m[36m--no-ff[0m          Create a merge commit (no fast-forward)
+      [1m[36m--stage[0m[36m [0m[36m<STAGE>[0m  What to stage before committing [default: all] [possible values: all, tracked, none]
+  [1m[36m-h[0m, [1m[36m--help[0m           Print help (see more with '--help')
 
 [1m[32mAutomation:[0m
       [1m[36m--no-hooks[0m         Skip hooks

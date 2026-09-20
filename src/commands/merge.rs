@@ -75,11 +75,6 @@ pub struct MergeOptions<'a> {
     pub yes: bool,
     pub stage: Option<super::commit::StageMode>,
     pub format: crate::cli::SwitchFormat,
-    /// Explicit `--author` override (`Name <email>`), forwarded to the
-    /// commit/squash steps' `git commit --author` and, for `--no-ff`, to the
-    /// `commit-tree` merge commit's `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL`.
-    /// `None` uses git's ambient identity.
-    pub author: Option<&'a str>,
 }
 
 /// Build the frozen [`ApprovedHookPlan`] for the merge's covered hooks, gating
@@ -161,7 +156,6 @@ pub fn handle_merge(opts: MergeOptions<'_>) -> anyhow::Result<()> {
         flags,
         yes,
         stage,
-        author,
         ..
     } = opts;
 
@@ -371,7 +365,6 @@ pub fn handle_merge(opts: MergeOptions<'_>) -> anyhow::Result<()> {
             options.stage_mode = stage_mode;
             options.show_no_squash_note = true;
             options.guidance = guidance.clone();
-            options.author = author;
 
             let _ = options.commit(&mut announcer)?;
             true // Committed directly
@@ -392,7 +385,6 @@ pub fn handle_merge(opts: MergeOptions<'_>) -> anyhow::Result<()> {
                 Some(stage_mode),
                 &mut announcer,
                 guidance,
-                author,
             )?,
             super::step::SquashResult::Squashed { .. }
         )
@@ -453,7 +445,7 @@ pub fn handle_merge(opts: MergeOptions<'_>) -> anyhow::Result<()> {
     });
     if !ff {
         // Create a merge commit on the target branch via commit-tree + update-ref
-        handle_no_ff_merge(Some(&target_branch), operations, &current_branch, author)?;
+        handle_no_ff_merge(Some(&target_branch), operations, &current_branch)?;
     } else {
         // Fast-forward push to target branch
         handle_push(Some(&target_branch), PushKind::MergeFastForward, operations)?;

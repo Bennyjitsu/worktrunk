@@ -613,10 +613,6 @@ pub(crate) struct MergeArgs {
     #[arg(long)]
     pub(crate) stage: Option<crate::commands::commit::StageMode>,
 
-    /// Commit author (`Name <email>`); committer stays the ambient identity
-    #[arg(long, value_parser = clap::builder::NonEmptyStringValueParser::new())]
-    pub(crate) author: Option<String>,
-
     /// Output format
     ///
     /// JSON prints structured result to stdout after merge completes.
