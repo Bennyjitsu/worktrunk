@@ -349,8 +349,7 @@ pub fn handle_squash(
     }
 
     // Commit with the generated message
-    let commit_args = vec!["commit", "-m", commit_message.as_str()];
-    if let Err(err) = repo.run_command(&commit_args) {
+    if let Err(err) = repo.run_command(&["commit", "-m", &commit_message]) {
         return Err(restore_after_failed_reset(
             repo,
             &pre_reset_sha,

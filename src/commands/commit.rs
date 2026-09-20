@@ -191,8 +191,8 @@ impl<'a> CommitGenerator<'a> {
         let formatted_message = self.format_message_for_display(&commit_message);
         eprintln!("{}", format_with_gutter(&formatted_message, None));
 
-        let commit_args = vec!["commit", "-m", commit_message.as_str()];
-        wt.run_command(&commit_args).context("Failed to commit")?;
+        wt.run_command(&["commit", "-m", &commit_message])
+            .context("Failed to commit")?;
 
         let commit_sha = wt.run_command(&["rev-parse", "HEAD"])?.trim().to_string();
         // Display uses `Repository::short_sha`; the JSON payload carries the full SHA.
