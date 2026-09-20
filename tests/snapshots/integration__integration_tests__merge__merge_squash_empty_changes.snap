@@ -69,7 +69,11 @@ exit_code: 0
 [107m [0m - Change 2
 [107m [0m - Revert to initial
 [2m○[22m No changes after squashing 3 commits
-[2m○[22m Already up to date with [1mmain[22m (no new commits, no rebase needed)
+[36m◎[39m [36mMerging 3 commits to [1mmain[22m @ [2m[HASH][22m (no commit/squash/rebase needed)[39m
+[107m [0m * [33m[HASH][m Revert to initial
+[107m [0m * [33m[HASH][m Change 2
+[107m [0m * [33m[HASH][m Change 1
+[32m✓[39m [32mMerged to [1mmain[22m [90m(3 commits[39m[90m)[39m[39m
 [36m◎[39m [36mRemoving [1mfeature[22m worktree & branch in background (same commit as [1mmain[22m,[39m [2m_[22m[36m)[39m
 [33m▲[39m [33mWorktree for [1mmain[22m @ [1m_REPO_[22m, but cannot change directory — shell integration not installed[39m
 [2m↳[22m [2mTo enable automatic cd, run [4mwt config shell install[24m[22m

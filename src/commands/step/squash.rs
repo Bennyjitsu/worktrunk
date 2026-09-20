@@ -332,13 +332,17 @@ pub fn handle_squash(
         .context("Failed to reset to merge base")?;
 
     // Check if there are actually any changes to commit. A failure in the
-    // check itself (not the "nothing staged" case below, which is a normal,
-    // intentional outcome left as pre-existing behavior) is post-reset like
-    // the commit below, so it gets the same rollback.
+    // check itself, and the "nothing staged" case below, are both post-reset
+    // like the commit below, so both get the same rollback: leaving the
+    // branch at the merge base here would report success while silently
+    // rewinding it, which is exactly the state `wt merge`'s cleanup reads as
+    // "already merged" before deleting the worktree and branch.
     let has_staged = wt
         .has_staged_changes()
         .map_err(|err| restore_after_failed_reset(repo, &pre_reset_sha, err))?;
     if !has_staged {
+        repo.run_command(&["reset", "--soft", &pre_reset_sha])
+            .context("Failed to restore original commits after no-op squash")?;
         eprintln!(
             "{}",
             info_message(format!(
