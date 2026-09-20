@@ -13,10 +13,6 @@ pub struct CommitArgs {
     #[arg(long)]
     pub(crate) stage: Option<crate::commands::commit::StageMode>,
 
-    /// Commit author (`Name <email>`); committer stays the ambient identity
-    #[arg(long, value_parser = clap::builder::NonEmptyStringValueParser::new())]
-    pub(crate) author: Option<String>,
-
     /// Preview prompt, command, and generated message without committing
     #[arg(long, conflicts_with = "show_prompt")]
     pub(crate) dry_run: bool,
@@ -46,10 +42,6 @@ pub struct SquashArgs {
     /// What to stage before committing [default: all]
     #[arg(long)]
     pub(crate) stage: Option<crate::commands::commit::StageMode>,
-
-    /// Commit author (`Name <email>`); committer stays the ambient identity
-    #[arg(long, value_parser = clap::builder::NonEmptyStringValueParser::new())]
-    pub(crate) author: Option<String>,
 
     /// Preview prompt, command, and generated message without squashing
     #[arg(long, conflicts_with = "show_prompt")]

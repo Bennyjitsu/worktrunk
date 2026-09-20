@@ -91,7 +91,6 @@ pub fn handle_squash(
     stage: Option<StageMode>,
     announcer: &mut HookAnnouncer<'_>,
     pre_approved_guidance: PreApprovedGuidance,
-    author: Option<&str>,
 ) -> anyhow::Result<SquashResult> {
     // Load config once, run LLM setup prompt, then reuse config
     let mut config = UserConfig::load().context("Failed to load config")?;
@@ -224,7 +223,7 @@ pub fn handle_squash(
             sha,
             message,
             stage_mode,
-        } = generator.commit_staged_changes(&wt, true, true, stage_mode, author)?;
+        } = generator.commit_staged_changes(&wt, true, true, stage_mode)?;
         return Ok(SquashResult::Squashed {
             sha,
             message,
@@ -348,11 +347,7 @@ pub fn handle_squash(
     }
 
     // Commit with the generated message
-    let mut commit_args = vec!["commit", "-m", commit_message.as_str()];
-    if let Some(author) = author {
-        commit_args.push("--author");
-        commit_args.push(author);
-    }
+    let commit_args = vec!["commit", "-m", commit_message.as_str()];
     if let Err(err) = repo.run_command(&commit_args) {
         return Err(restore_after_failed_reset(
             repo,
