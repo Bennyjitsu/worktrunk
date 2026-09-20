@@ -78,9 +78,6 @@ Usage: [1m[36mwt merge[0m [36m[OPTIONS][0m [36m[TARGET][0m
           - [1m[36mtracked[0m: Stage tracked changes only (like [1mgit add -u[0m)
           - [1m[36mnone[0m:    Stage nothing, commit only what's already in the index
 
-      [1m[36m--author[0m[36m [0m[36m<AUTHOR>[0m
-          Commit author ([1mName <email>[0m); committer stays the ambient identity
-
   [1m[36m-h[0m, [1m[36m--help[0m
           Print help (see a summary with '-h')
 

@@ -172,9 +172,6 @@ Options:
           - tracked: Stage tracked changes only (like git add -u)
           - none:    Stage nothing, commit only what's already in the index
 
-      --author <AUTHOR>
-          Commit author (Name <email>); committer stays the ambient identity
-
       --dry-run
           Preview prompt, command, and generated message without committing
 
@@ -261,9 +258,6 @@ Options:
           - all:     Stage everything: untracked files + unstaged tracked changes
           - tracked: Stage tracked changes only (like git add -u)
           - none:    Stage nothing, commit only what's already in the index
-
-      --author <AUTHOR>
-          Commit author (Name <email>); committer stays the ambient identity
 
       --dry-run
           Preview prompt, command, and generated message without squashing
