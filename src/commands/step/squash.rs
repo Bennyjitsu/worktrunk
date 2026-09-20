@@ -57,18 +57,20 @@ pub enum SquashResult {
 
 /// Restore `pre_reset_sha` after a failure that struck after the squash's
 /// soft reset, so the original per-author commits survive intact instead of
-/// staying collapsed into anonymous staged changes. Chains the restore
-/// failure (if any) onto the original error so neither diagnostic is lost.
+/// staying collapsed into anonymous staged changes. Keeps `err` as the root
+/// of the chain either way, so its `CommandError` (e.g. git's stderr) still
+/// surfaces through the top-level renderer; the rollback outcome rides along
+/// as added context rather than replacing the original failure's message.
 fn restore_after_failed_reset(
     repo: &Repository,
     pre_reset_sha: &str,
     err: anyhow::Error,
 ) -> anyhow::Error {
     match repo.run_command(&["reset", "--soft", pre_reset_sha]) {
-        Ok(_) => err.context("original commits restored"),
-        Err(rollback_err) => rollback_err
-            .context(err)
-            .context("original commits NOT restored"),
+        Ok(_) => err.context("Squash failed; original commits restored"),
+        Err(rollback_err) => err.context(format!(
+            "Squash failed; original commits NOT restored: {rollback_err:#}"
+        )),
     }
 }
 
@@ -480,4 +482,46 @@ fn preview_squash(
     }
     let message = inputs.generate_message()?;
     print_dry_run(&prompt, &commit_config, &message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use worktrunk::testing::TestRepo;
+
+    /// When both the squash commit and the rollback attempt fail, the
+    /// original error's own chain (e.g. a `CommandError` carrying git's
+    /// stderr) must survive — not collapse to its outermost message. Passing
+    /// an `anyhow::Error` as a `.context()` *argument* only stores its
+    /// `Display` (the top frame), discarding everything deeper; the fix
+    /// instead calls `.context()` *on* the original error, keeping it as the
+    /// chain's root. No deterministic CLI trigger exists for a rollback that
+    /// itself fails (would need the squash commit *and* the reset to both
+    /// fail), so this is proven directly.
+    #[test]
+    fn restore_after_failed_reset_keeps_original_errors_chain_when_rollback_also_fails() {
+        let test = TestRepo::with_initial_commit();
+        let repo = Repository::at(test.root_path()).unwrap();
+
+        let original_err = anyhow::anyhow!("git stderr: fatal deep cause")
+            .context("Failed to create squash commit");
+
+        // An invalid target makes `git reset --soft` itself fail, so both
+        // halves of the rollback are exercised.
+        let result = restore_after_failed_reset(&repo, "not-a-valid-sha", original_err);
+
+        let full = format!("{result:#}");
+        assert!(
+            full.contains("git stderr: fatal deep cause"),
+            "the original error's deepest cause must survive in the chain: {full}"
+        );
+        assert!(
+            full.contains("Failed to create squash commit"),
+            "the original error's own top message must survive: {full}"
+        );
+        assert!(
+            full.contains("NOT restored"),
+            "must say the rollback itself failed: {full}"
+        );
+    }
 }
