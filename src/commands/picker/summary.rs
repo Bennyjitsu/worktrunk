@@ -175,13 +175,10 @@ mod tests {
     fn test_write_handles_unwritable_path() {
         use crate::summary::CachedSummary;
         let (_t, repo) = temp_repo();
-        // Block cache directory creation by placing a file where the directory
-        // should be. `TestRepo` stamps the cache epoch, so the directory is
-        // already there and has to go first.
+        // Block cache directory creation by placing a file where the directory should be
         let wt_dir = repo.wt_dir();
         fs::create_dir_all(&wt_dir).unwrap();
         let cache_parent = wt_dir.join("cache");
-        fs::remove_dir_all(&cache_parent).unwrap();
         fs::write(&cache_parent, "blocker").unwrap();
 
         let cached = CachedSummary {
@@ -641,6 +638,54 @@ mod tests {
             &repo,
         );
         assert_eq!(summary, "Add new file");
+    }
+
+    /// The branch summary's diff goes into the prompt, so the user's diff
+    /// display settings must not change what the LLM receives. The prompt is
+    /// read from the command's stdin: it never reaches a terminal, so nothing
+    /// downstream would strip an escape byte that leaked into it.
+    #[test]
+    fn test_generate_summary_prompt_ignores_diff_display_config() {
+        use crate::summary::CachedSummary;
+        use path_slash::PathExt as _;
+
+        let (t, repo, head) = temp_repo_with_feature();
+        let capture = t.path().join(".git").join("summary-prompt");
+        let capture_arg = capture.to_slash_lossy();
+        assert!(
+            !capture_arg.contains('\''),
+            "capture path must not contain single quotes: {capture_arg}"
+        );
+        let command = format!("cat > '{capture_arg}'; echo 'Add new file'");
+
+        let prompt = || {
+            CachedSummary::clear_all(&repo).unwrap();
+            let summary =
+                crate::summary::generate_summary("feature", &head, Some(t.path()), &command, &repo);
+            assert_eq!(summary, "Add new file");
+            fs::read(&capture).unwrap()
+        };
+
+        let default_prompt = prompt();
+        assert!(
+            !default_prompt.is_empty(),
+            "the summary command must have received a prompt to compare"
+        );
+
+        for (key, value) in [
+            ("color.ui", "always"),
+            ("diff.external", "echo"),
+            ("diff.noprefix", "true"),
+        ] {
+            repo.run_command(&["config", key, value]).unwrap();
+        }
+
+        let configured_prompt = prompt();
+        assert!(
+            !configured_prompt.contains(&0x1b),
+            "under `color.ui = always` the summary prompt must carry no escape bytes"
+        );
+        assert_eq!(configured_prompt, default_prompt);
     }
 
     #[test]
