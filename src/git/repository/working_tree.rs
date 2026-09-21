@@ -1032,13 +1032,24 @@ impl<'a> WorkingTree<'a> {
     ///
     /// Note: The index is per-worktree in git, so this checks this specific
     /// worktree's staging area.
+    ///
+    /// Plumbing ignores user diff display configuration. Intent-to-add entries
+    /// remain invisible here, matching porcelain `git diff --cached`.
     pub fn has_staged_changes(&self) -> anyhow::Result<bool> {
-        // Exit code 0 = no diff (no staged changes), exit code 1 = diff exists (has staged changes)
-        // run_command returns Ok on exit 0, Err on non-zero
-        // So: Err means has changes
-        Ok(self
-            .run_command(&["diff", "--cached", "--quiet", "--exit-code"])
-            .is_err())
+        let base = self.index_base()?;
+        let args = PlumbingDiff::Index.args(&[
+            "--cached",
+            "--ita-invisible-in-index",
+            "--quiet",
+            "--end-of-options",
+            &base,
+        ]);
+        let output = self.run_command_output(&args)?;
+        match output.status.code() {
+            Some(0) => Ok(false),
+            Some(1) => Ok(true),
+            _ => Err(CommandError::from_failed_output("git", &args, &output).into()),
+        }
     }
 
     /// Check whether this worktree has initialized submodules.
@@ -1315,6 +1326,75 @@ mod tests {
         assert!(
             err.to_string().contains("Failed to read worktree lock"),
             "expected a lock-file IO error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn has_staged_changes_surfaces_git_errors() {
+        let test = TestRepo::with_initial_commit();
+        let repo = Repository::at(test.root_path()).unwrap();
+        let worktree = repo.current_worktree();
+        std::fs::write(worktree.git_dir().unwrap().join("index"), "not an index").unwrap();
+
+        let error = worktree.has_staged_changes().unwrap_err();
+        assert!(
+            error.to_string().contains("git diff"),
+            "expected the failed git command, got {error:#}"
+        );
+    }
+
+    #[test]
+    fn has_staged_changes_checks_whole_worktree_from_nested_discovery_path() {
+        let test = TestRepo::with_initial_commit();
+        let nested = test.root_path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::write(test.root_path().join("staged.txt"), "staged\n").unwrap();
+        test.run_git(&["add", "staged.txt"]);
+        test.run_git(&["config", "diff.relative", "true"]);
+
+        let repo = Repository::at(&nested).unwrap();
+        assert!(
+            repo.current_worktree().has_staged_changes().unwrap(),
+            "staged paths outside the discovery directory must remain visible"
+        );
+    }
+
+    #[test]
+    fn has_staged_changes_ignores_intent_to_add_entries() {
+        let test = TestRepo::with_initial_commit();
+        std::fs::write(test.root_path().join("intent.txt"), "unstaged\n").unwrap();
+        test.run_git(&["add", "--intent-to-add", "intent.txt"]);
+
+        let repo = Repository::at(test.root_path()).unwrap();
+        assert!(
+            !repo.current_worktree().has_staged_changes().unwrap(),
+            "an intent-to-add entry has no staged content"
+        );
+    }
+
+    #[test]
+    fn has_staged_changes_sees_staged_gitlink_behind_submodule_ignore() {
+        let test = TestRepo::with_initial_commit();
+        std::fs::write(
+            test.root_path().join(".gitmodules"),
+            "[submodule \"sub\"]\n\tpath = sub\n\turl = ./sub\n",
+        )
+        .unwrap();
+        test.run_git(&["add", ".gitmodules"]);
+        test.run_git(&["commit", "-m", "register submodule"]);
+        test.run_git(&["config", "submodule.sub.ignore", "all"]);
+        let head = test.git_output(&["rev-parse", "HEAD"]);
+        test.run_git(&[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{head},sub"),
+        ]);
+
+        let repo = Repository::at(test.root_path()).unwrap();
+        assert!(
+            repo.current_worktree().has_staged_changes().unwrap(),
+            "a staged gitlink must stay visible through submodule.<name>.ignore"
         );
     }
 
