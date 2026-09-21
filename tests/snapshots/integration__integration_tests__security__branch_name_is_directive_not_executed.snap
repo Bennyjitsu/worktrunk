@@ -1,10 +1,11 @@
 ---
-source: tests/integration_tests/merge.rs
+source: tests/integration_tests/security.rs
 info:
   program: wt
   args:
-    - merge
-    - main
+    - switch
+    - "--create"
+    - __WORKTRUNK_EXEC__touch$IFS/tmp/hacked2
   env:
     APPDATA: "[TEST_CONFIG_HOME]"
     CLAUDE_CONFIG_DIR: "[TEST_CLAUDE_CONFIG]"
@@ -35,6 +36,7 @@ info:
     USERPROFILE: "[TEST_HOME]"
     WORKTRUNK_APPROVALS_PATH: "[TEST_APPROVALS]"
     WORKTRUNK_CONFIG_PATH: "[TEST_CONFIG]"
+    WORKTRUNK_DIRECTIVE_CD_FILE: "[DIRECTIVE_CD_FILE]"
     WORKTRUNK_SYSTEM_CONFIG_PATH: "[TEST_SYSTEM_CONFIG]"
     WORKTRUNK_TEST_BASH_INSTALLED: "0"
     WORKTRUNK_TEST_CLAUDE_INSTALLED: "0"
@@ -59,17 +61,6 @@ exit_code: 0
 ----- stdout -----
 
 ----- stderr -----
-[36m◎[39m [36mSquashing 3 commits into a single commit...[39m
-[36m◎[39m [36mGenerating squash commit message...[39m
-[2m↳[22m [2mUsing fallback commit message. For LLM setup guide, run [4mwt config --help[24m[22m
-[107m [0m [1mSquash commits from feature[22m
-[107m [0m 
-[107m [0m Combined commits:
-[107m [0m - Change 1
-[107m [0m - Change 2
-[107m [0m - Revert to initial
-[2m○[22m No changes after squashing 3 commits
-[2m○[22m Already up to date with [1mmain[22m (no new commits, no rebase needed)
-[36m◎[39m [36mRemoving [1mfeature[22m worktree & branch in background (same commit as [1mmain[22m,[39m [2m_[22m[36m)[39m
-[33m▲[39m [33mWorktree for [1mmain[22m @ [1m_REPO_[22m, but cannot change directory — shell integration not installed[39m
-[2m↳[22m [2mTo enable automatic cd, run [4mwt config shell install[24m[22m
+[32m✓[39m [32mCreated branch [1m__WORKTRUNK_EXEC__touch$IFS/tmp/hacked2[22m from [1mmain[22m and worktree @ [1m'_REPO_.__WORKTRUNK_EXEC__touch$IFS-tmp-hacked2'[22m[39m
+[2m↳[22m [2mTo customize worktree locations, run [4mwt config create[24m[22m
+[0m
