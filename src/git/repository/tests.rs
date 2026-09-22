@@ -2059,7 +2059,7 @@ fn usable_worktree_for_branch_refuses_a_prunable_registration() {
 
     let err = repo.usable_worktree_for_branch("feature").unwrap_err();
     assert!(
-        err.to_string().contains("Worktree directory missing"),
+        err.to_string().contains("is stale"),
         "a prunable registration must be refused, got: {err}"
     );
     assert_eq!(
@@ -2162,6 +2162,240 @@ fn worktree_is_unusable_covers_locked_absent_and_recreated() {
         repo.worktree_is_unusable(&recreated).unwrap(),
         "a recreated directory exists, so only the `prunable` half catches it"
     );
+}
+
+/// Unregistering a stale worktree repeats git's own prune test at deletion
+/// time, since the caller's `prunable` came from an earlier listing: an entry
+/// locked or reconnected since is refused and keeps its registration. A stale
+/// entry goes whatever is left at its path — nothing, a directory, or a file —
+/// and a directory that remains keeps its files.
+#[test]
+fn prune_worktree_entry_repeats_git_prune_test() {
+    use crate::git::Repository;
+    use crate::testing::TestRepo;
+
+    let mut test = TestRepo::with_initial_commit();
+    let live = test.add_worktree("live");
+    let locked = test.add_worktree("locked-absent");
+    let absent = test.add_worktree("absent");
+    let dotgit_gone = test.add_worktree("dotgit-gone");
+    let now_a_file = test.add_worktree("now-a-file");
+
+    test.lock_worktree("locked-absent", Some("removable media"));
+    std::fs::remove_dir_all(&locked).unwrap();
+    std::fs::remove_dir_all(&absent).unwrap();
+    std::fs::remove_file(dotgit_gone.join(".git")).unwrap();
+    std::fs::write(dotgit_gone.join("leftover.txt"), "kept").unwrap();
+    // `now-a-file/.git` fails with `NotADirectory`, which git also counts as
+    // nothing there.
+    std::fs::remove_dir_all(&now_a_file).unwrap();
+    std::fs::write(&now_a_file, "not a directory").unwrap();
+
+    let repo = Repository::at(test.root_path()).unwrap();
+    let registered = || {
+        test.git_output(&["worktree", "list", "--porcelain"])
+            .lines()
+            .filter_map(|line| line.strip_prefix("worktree "))
+            .filter_map(|path| PathBuf::from(path).file_name().map(|n| n.to_owned()))
+            .collect::<Vec<_>>()
+    };
+
+    let err = repo.prune_worktree_entry(&live).unwrap_err();
+    assert!(err.to_string().contains("no longer stale"), "got: {err}");
+    let err = repo.prune_worktree_entry(&locked).unwrap_err();
+    assert!(err.to_string().contains("is locked"), "got: {err}");
+
+    repo.prune_worktree_entry(&absent).unwrap();
+    repo.prune_worktree_entry(&dotgit_gone).unwrap();
+    repo.prune_worktree_entry(&now_a_file).unwrap();
+    let names = registered();
+    for (path, kept) in [
+        (&live, true),
+        (&locked, true),
+        (&absent, false),
+        (&dotgit_gone, false),
+        (&now_a_file, false),
+    ] {
+        assert_eq!(
+            names.iter().any(|name| name == path.file_name().unwrap()),
+            kept,
+            "{} registration; worktrees: {names:?}",
+            path.display()
+        );
+    }
+    assert!(dotgit_gone.join("leftover.txt").is_file());
+
+    let err = repo.prune_worktree_entry(&absent).unwrap_err();
+    assert!(
+        err.to_string().contains("No worktree registered"),
+        "got: {err}"
+    );
+}
+
+/// A `.git` that can't be statted is not taken for an absent one: the entry
+/// keeps its registration, and the error names what couldn't be checked.
+#[cfg(unix)]
+#[test]
+fn prune_worktree_entry_keeps_an_entry_it_cannot_check() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use crate::git::Repository;
+    use crate::testing::TestRepo;
+
+    let test = TestRepo::with_initial_commit();
+    let guarded = test.root_path().parent().unwrap().join("guarded");
+    std::fs::create_dir(&guarded).unwrap();
+    let worktree_path = guarded.join("wt");
+    test.run_git(&[
+        "worktree",
+        "add",
+        "--detach",
+        worktree_path.to_str().unwrap(),
+    ]);
+    let repo = Repository::at(test.root_path()).unwrap();
+
+    let set_mode =
+        |mode| std::fs::set_permissions(&guarded, std::fs::Permissions::from_mode(mode)).unwrap();
+    set_mode(0o000);
+    // Skip if running as root: euid 0 ignores DAC mode bits, so the stat
+    // would succeed. Probe with the stat the mode should refuse.
+    if std::fs::symlink_metadata(worktree_path.join(".git")).is_ok() {
+        set_mode(0o755);
+        crate::styling::eprintln!("Skipping - running with elevated privileges");
+        return;
+    }
+    let result = repo.prune_worktree_entry(&worktree_path);
+    set_mode(0o755);
+
+    let err = result.unwrap_err();
+    assert!(
+        format!("{err:#}").contains("Failed to check"),
+        "got: {err:#}"
+    );
+    assert!(
+        test.git_output(&["worktree", "list", "--porcelain"])
+            .contains("guarded/wt"),
+        "the entry should stay registered"
+    );
+}
+
+/// A stale registration is asked what unregistering it would destroy: its
+/// index against `HEAD`, and git's in-progress state files. A registration
+/// with no index has nothing staged, and on an unborn branch the index is
+/// read against the empty tree, so a staged file counts and an emptied index
+/// doesn't.
+#[test]
+fn stale_worktree_work_reads_the_registration() {
+    use crate::git::{InProgressOperation, Repository, StaleWorktreeWork};
+    use crate::testing::TestRepo;
+
+    let mut test = TestRepo::with_initial_commit();
+    let clean = test.add_worktree("clean");
+    let staged = test.add_worktree("staged");
+    std::fs::write(staged.join("new.txt"), "work").unwrap();
+    test.run_git_in(&staged, &["add", "new.txt"]);
+    let bisecting = test.add_worktree("bisecting");
+    test.run_git_in(&bisecting, &["bisect", "start"]);
+    let parent = test.root_path().parent().unwrap().to_path_buf();
+    let no_checkout = parent.join("repo.no-checkout");
+    test.run_git(&[
+        "worktree",
+        "add",
+        "--no-checkout",
+        "--detach",
+        no_checkout.to_str().unwrap(),
+    ]);
+    let unborn = parent.join("repo.unborn");
+    test.run_git(&[
+        "worktree",
+        "add",
+        "--orphan",
+        "-b",
+        "fresh",
+        unborn.to_str().unwrap(),
+    ]);
+    std::fs::write(unborn.join("first.txt"), "work").unwrap();
+    test.run_git_in(&unborn, &["add", "first.txt"]);
+    // An unborn branch whose index exists but holds nothing.
+    let unborn_empty = parent.join("repo.unborn-empty");
+    test.run_git(&[
+        "worktree",
+        "add",
+        "--orphan",
+        "-b",
+        "fresh-empty",
+        unborn_empty.to_str().unwrap(),
+    ]);
+    std::fs::write(unborn_empty.join("first.txt"), "work").unwrap();
+    test.run_git_in(&unborn_empty, &["add", "first.txt"]);
+    test.run_git_in(&unborn_empty, &["rm", "--cached", "-q", "first.txt"]);
+    for path in [
+        &clean,
+        &staged,
+        &bisecting,
+        &no_checkout,
+        &unborn,
+        &unborn_empty,
+    ] {
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    let repo = Repository::at(test.root_path()).unwrap();
+    assert_eq!(repo.stale_worktree_work(&clean).unwrap(), None);
+    assert_eq!(
+        repo.stale_worktree_work(&staged).unwrap(),
+        Some(StaleWorktreeWork::StagedChanges)
+    );
+    assert_eq!(
+        repo.stale_worktree_work(&bisecting).unwrap(),
+        Some(StaleWorktreeWork::Operation(InProgressOperation::Bisect))
+    );
+    assert_eq!(repo.stale_worktree_work(&no_checkout).unwrap(), None);
+    assert_eq!(
+        repo.stale_worktree_work(&unborn).unwrap(),
+        Some(StaleWorktreeWork::StagedChanges)
+    );
+    assert_eq!(repo.stale_worktree_work(&unborn_empty).unwrap(), None);
+}
+
+/// The deletion waits for in-process registry readers: `git worktree list`
+/// reads every entry's files, so one overlapping the deletion could read the
+/// entry half-deleted and fail. A held read guard keeps the entry intact; its
+/// release lets the prune through.
+#[test]
+fn prune_worktree_entry_waits_for_registry_readers() {
+    use std::time::{Duration, Instant};
+
+    use crate::git::Repository;
+    use crate::testing::TestRepo;
+
+    let mut test = TestRepo::with_initial_commit();
+    let worktree_path = test.add_worktree("feature");
+    std::fs::remove_dir_all(&worktree_path).unwrap();
+    let registration = test
+        .root_path()
+        .join(".git/worktrees")
+        .join(worktree_path.file_name().unwrap());
+    assert!(registration.is_dir());
+    let repo = Repository::at(test.root_path()).unwrap();
+    let worker_repo = repo.clone();
+
+    let reader = repo.worktree_registry_read();
+    let worker = std::thread::spawn(move || worker_repo.prune_worktree_entry(&worktree_path));
+    let deadline = Instant::now() + Duration::from_millis(200);
+    while registration.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let survived_reader = registration.exists();
+    drop(reader);
+    let result = worker.join().expect("prune thread should not panic");
+
+    assert!(
+        survived_reader,
+        "the prune ran under a held registry read guard"
+    );
+    result.unwrap();
+    assert!(!registration.exists());
 }
 
 /// The ownership gate accepts a worktree that holds its own registration, in

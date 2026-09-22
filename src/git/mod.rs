@@ -100,9 +100,9 @@ pub use remove::{
 pub use repository::sha_cache;
 pub use repository::{
     Branch, BranchDiffSpec, CommitMessageDetail, InProgressOperation, IntegrationTargets,
-    PreparedDiff, RefSnapshot, Repository, ResolvedWorktree, Selector, TempIndex, WorkingTree,
-    duplicated_branches, is_valid_branch_name, normalize_selector, resolve_input_path,
-    select_comparison_base, set_base_path,
+    PreparedDiff, RefSnapshot, Repository, ResolvedWorktree, Selector, StaleWorktreeWork,
+    TempIndex, WorkingTree, duplicated_branches, is_valid_branch_name, normalize_selector,
+    resolve_input_path, select_comparison_base, set_base_path,
 };
 pub use url::parse_owner_repo;
 pub use url::{GitRemoteUrl, GitRepoInfo, GitRepoProvider};
@@ -826,10 +826,12 @@ impl WorktreeInfo {
         WorktreeRef::new(self.path.clone(), self.branch.as_deref(), &self.head)
     }
 
-    /// Returns true if this worktree is prunable (directory deleted but git still tracks metadata).
+    /// Returns true if git reports this worktree prunable: the `.git` its
+    /// registration names is gone, with the directory or without it.
     ///
-    /// Prunable worktrees cannot be operated on - the directory doesn't exist.
-    /// Most iteration over worktrees should skip prunable ones.
+    /// Prunable worktrees cannot be operated on — git no longer resolves the
+    /// directory, if one remains, as this worktree. Most iteration over
+    /// worktrees should skip prunable ones.
     pub fn is_prunable(&self) -> bool {
         self.prunable.is_some()
     }
