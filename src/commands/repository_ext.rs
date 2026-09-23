@@ -215,54 +215,46 @@ impl RepositoryCliExt for Repository {
                     }
                     .into());
                 }
-                // Directory missing (e.g. external `rm -rf`): fall back to
-                // branch-only deletion, recording the stale entry in the plan
-                // so execution unregisters it — planning stays a pure read
-                // (`wt step prune`'s scan doubles as `--dry-run`, and `wt
-                // remove` plans before its approval prompt). A detached
-                // worktree has no branch to fall back to, so an absent
-                // directory leaves it to the prunable arm below rather than
-                // here.
-                //
-                // The recorded prune names this worktree rather than sweeping
-                // the repo, so a sibling whose directory is merely absent
-                // right now keeps its registration. `git worktree remove`
-                // refuses a locked worktree where a repo-wide prune ignored
-                // one, which needs no guard here: the lock check above already
-                // returned for every locked entry in this arm.
-                //
-                // `exists()` is that cleanup's precondition rather than a
-                // proxy for health: `prune_worktree_entry` unregisters with
-                // `git worktree remove`, which skips its validation only while
-                // the directory is absent.
-                if let Some(branch) = wt.branch.as_deref()
-                    && !wt.path.exists()
-                {
+                // Stale entry — git calls it prunable once `<path>/.git` is
+                // gone, whether the whole directory went (an external `rm -rf`)
+                // or was recreated empty (an interrupted `wt switch`). Git
+                // withholds `prunable` from a locked entry, and the lock guard
+                // above has returned for those anyway. Fall back to branch-only
+                // deletion, recording the entry in the plan so execution
+                // unregisters it and leaves any directory in place — planning
+                // stays a pure read (`wt step prune`'s scan doubles as
+                // `--dry-run`, and `wt remove` plans before its approval
+                // prompt). The recorded prune names this worktree rather than
+                // sweeping the repo, so a sibling whose directory is merely
+                // absent right now keeps its registration. An entry whose
+                // registration holds staged changes or an operation partway
+                // through is kept unless `--force` waives it, as it waives a
+                // live worktree's uncommitted changes: unregistering deletes
+                // those, and `git worktree repair` can still bring them back.
+                if wt.is_prunable() {
+                    // A detached entry has no branch to fall back to, and no
+                    // plan shape of its own, so it is reported rather than
+                    // removed. `wt step prune` unregisters one without a plan.
+                    let Some(branch) = wt.branch.clone() else {
+                        return Err(GitError::worktree_missing(
+                            wt.dir_name().to_string(),
+                            &wt.path,
+                        )
+                        .into());
+                    };
+                    if !force_worktree && let Some(work) = self.stale_worktree_work(&wt.path)? {
+                        return Err(GitError::StaleWorktreeHoldsWork {
+                            branch,
+                            path: wt.path.clone(),
+                            directory_remains: wt.path.is_dir(),
+                            work,
+                        }
+                        .into());
+                    }
                     Resolved::BranchOnly {
                         pruned_from: Some(wt.path.clone()),
-                        branch: branch.to_string(),
+                        branch,
                     }
-                } else if wt.is_prunable() {
-                    // Still registered, but the directory no longer holds this
-                    // worktree. Two shapes reach here: one deleted and
-                    // recreated, which is what an interrupted `wt switch`
-                    // leaves behind; and a detached one simply deleted, which
-                    // the branch-only cleanup above cannot take because it has
-                    // no branch to fall back to. Neither route out of here
-                    // works: that cleanup wants a branch *and* an absent
-                    // directory, and for the recreated directory the removal
-                    // below walks into git's own validation a few calls later,
-                    // reaching the user as a raw `exit 128`. The hint names the
-                    // repo-wide `git worktree prune` because it is what clears
-                    // both; the detached one, whose directory is absent, a
-                    // targeted `git worktree remove <path>` would also clear.
-                    return Err(GitError::WorktreeMissing {
-                        branch: wt
-                            .branch
-                            .clone()
-                            .unwrap_or_else(|| wt.dir_name().to_string()),
-                    }
-                    .into());
                 } else {
                     let is_current = worktrunk::path::paths_match(&wt.path, current_path);
                     Resolved::Worktree {
@@ -290,6 +282,10 @@ impl RepositoryCliExt for Repository {
         if let Some(branch) = branch_name {
             check_not_default_branch(self, branch, &deletion_mode)?;
         }
+        // An orphan worktree's branch is unborn until its first commit: it has
+        // no ref, so there is nothing for the removal to delete.
+        let branch_unborn =
+            branch_name.is_some_and(|branch| snapshot.local_branch(branch).is_none());
 
         // Phase 4: Return BranchOnly early (after validation), or continue to
         // worktree-level checks. Branch-only removals have no pre-remove hook,
@@ -306,14 +302,17 @@ impl RepositoryCliExt for Repository {
                     live_sibling_checkout(worktrees, &branch, target)
                         .map(|sibling| SharedBranchCheckout::new(&sibling.path, &deletion_mode))
                 });
-                if let Some(shared) = shared {
+                // A shared branch stays for its sibling, and an unborn one has
+                // no ref to delete, so either way pruning the entry is the whole
+                // removal.
+                if shared.is_some() || branch_unborn {
                     return Ok(RemovalPlan::BranchOnly {
                         branch_name: branch,
                         deletion_mode: BranchDeletionMode::Keep,
                         prune_entry: pruned_from,
                         target_branch: None,
                         integration_reason: None,
-                        branch_checked_out_at: Some(shared),
+                        branch_checked_out_at: shared,
                     });
                 }
                 let default_branch = self.default_branch();
@@ -384,32 +383,32 @@ impl RepositoryCliExt for Repository {
         // retention prediction. The actual branch deletion re-decides against
         // fresh refs (`delete_branch_if_safe`'s CAS), so this is display-only.
         //
-        // A retained shared branch skips all of it: forcing `Keep` — the single
-        // chokepoint every deletion path honors — settles the outcome, so an
-        // integration verdict would only be computed to be ignored, and
-        // reporting one alongside a branch that survives reads as a
-        // contradiction.
-        let (deletion_mode, target_branch, integration_reason) = if branch_checked_out_at.is_some()
-        {
-            (BranchDeletionMode::Keep, None, None)
-        } else {
-            let default_branch = self.default_branch();
-            let target_branch = match (&default_branch, &branch_name) {
-                (Some(db), Some(bn)) if db == bn => None,
-                _ => default_branch,
+        // A shared branch, retained for its sibling, skips all of it, as does
+        // an unborn one, which has nothing to delete. Forcing `Keep` — the
+        // single chokepoint every deletion path honors — settles the outcome,
+        // so an integration verdict would only be computed to be ignored, and
+        // beside a branch that survives it reads as a contradiction.
+        let (deletion_mode, target_branch, integration_reason) =
+            if branch_checked_out_at.is_some() || branch_unborn {
+                (BranchDeletionMode::Keep, None, None)
+            } else {
+                let default_branch = self.default_branch();
+                let target_branch = match (&default_branch, &branch_name) {
+                    (Some(db), Some(bn)) if db == bn => None,
+                    _ => default_branch,
+                };
+                let (integration_reason, target_branch) = match compute_integration_reason(
+                    self,
+                    snapshot,
+                    branch_name.as_deref(),
+                    target_branch.as_deref(),
+                    deletion_mode,
+                ) {
+                    (reason, Some(effective_target)) => (reason, Some(effective_target)),
+                    (reason, None) => (reason, target_branch),
+                };
+                (deletion_mode, target_branch, integration_reason)
             };
-            let (integration_reason, target_branch) = match compute_integration_reason(
-                self,
-                snapshot,
-                branch_name.as_deref(),
-                target_branch.as_deref(),
-                deletion_mode,
-            ) {
-                (reason, Some(effective_target)) => (reason, Some(effective_target)),
-                (reason, None) => (reason, target_branch),
-            };
-            (deletion_mode, target_branch, integration_reason)
-        };
 
         // Capture commit SHA before removal for post-remove hook template variables.
         // This ensures {{ commit }} references the removed worktree's state.

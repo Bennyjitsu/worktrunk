@@ -173,8 +173,9 @@ pub use diff::{CommitMessageDetail, PreparedDiff};
 pub use integration::{BranchDiffSpec, IntegrationTargets, select_comparison_base};
 pub use ref_snapshot::RefSnapshot;
 pub(super) use working_tree::path_to_logging_context;
+use working_tree::registration_worktree_path;
 pub use working_tree::{InProgressOperation, TempIndex, WorkingTree};
-pub use worktrees::duplicated_branches;
+pub use worktrees::{StaleWorktreeWork, duplicated_branches};
 
 // ============================================================================
 // Repository Cache
@@ -1470,9 +1471,11 @@ impl Repository {
     /// the reason that gate uses it rather than the `GIT_DIRS`-cached
     /// [`WorkingTree::git_dir`].
     ///
-    /// Two callers, with opposite readings of `None`:
+    /// Three callers, with different readings of `None`:
     /// [`Self::prime_worktree_path_caches`] declines to seed a cache entry and
-    /// leaves the answer to the subprocess, while the removal gate refuses.
+    /// leaves the answer to the subprocess, `separate_git_dir_work_tree`
+    /// declines the backlink it was confirming and falls back to
+    /// `parent(git_common_dir)`, and the removal gate refuses.
     fn git_dir_at(dir: &Path) -> Option<PathBuf> {
         let dot_git = dir.join(".git");
         // Follows a symlinked `.git`, as git and the subprocess fallback do.
@@ -1598,7 +1601,8 @@ impl Repository {
     /// |----------------------------|----------------------------|-------------------------------|
     /// | Bare `.git`                | `core.bare = true`         | `git_common_dir` is the repo  |
     /// | Submodule `.git/modules/X` | `core.worktree` set by git | `rev-parse --show-toplevel`   |
-    /// | Normal `.git`              | neither set                | `parent(git_common_dir)`      |
+    /// | Separate git dir           | `<common>/gitdir` backlink | `parent(backlink)`            |
+    /// | Normal `.git`              | none of the above          | `parent(git_common_dir)`      |
     ///
     /// Submodules need `core.worktree` because their git data lives in the
     /// parent's `.git/modules/` — the `parent(.git)` rule would point at
@@ -1613,6 +1617,12 @@ impl Repository {
     /// the probe fails (non-local value, git ignored it) we fall through
     /// to the normal-repo path. The common case — no `core.worktree`
     /// anywhere — skips the subprocess, which is the point.
+    ///
+    /// A repository whose git directory lives outside its work tree
+    /// (`--separate-git-dir`) has neither signal, and `parent(git_common_dir)`
+    /// names the store's parent rather than the work tree. The backlink git
+    /// writes there covers it where it exists; see
+    /// `separate_git_dir_work_tree` for when that is.
     ///
     /// # Errors
     ///
@@ -1641,6 +1651,10 @@ impl Repository {
                     return Ok(PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()));
                 }
 
+                if let Some(work_tree) = self.separate_git_dir_work_tree() {
+                    return Ok(work_tree);
+                }
+
                 Ok(self
                     .git_common_dir
                     .parent()
@@ -1648,6 +1662,42 @@ impl Repository {
                     .to_path_buf())
             })
             .map(|p| p.as_path())
+    }
+
+    /// The work tree a `--separate-git-dir` repository records in its `gitdir`
+    /// backlink, if it has one.
+    ///
+    /// When the git directory lives outside the work tree, the work tree's
+    /// `.git` is a *file* pointing at the store and `parent(git_common_dir)`
+    /// names the store's parent — the wrong answer, and the one
+    /// `git worktree list` gives too, since git derives its main-worktree
+    /// entry by stripping a trailing `/.git` that isn't there (see the
+    /// submodule correction in [`Self::list_worktrees`], which this layout
+    /// trips the same way).
+    ///
+    /// Git's own record of the other direction is `<git-common-dir>/gitdir`,
+    /// holding the path of the work tree's `.git` file — the same format as a
+    /// linked worktree's `.git/worktrees/<name>/gitdir`, down to the relative
+    /// form git writes under `worktree.useRelativePaths`, so
+    /// [`registration_worktree_path`] reads it. Only
+    /// `git worktree repair` writes it; `git init --separate-git-dir` and
+    /// `git clone --separate-git-dir` leave the store with no backlink, so a
+    /// repository that has never been repaired records its work tree nowhere
+    /// and still falls through to `parent(git_common_dir)`. Running
+    /// `git worktree repair` from the work tree is what materializes it.
+    ///
+    /// The backlink is one-way, so it is confirmed rather than trusted:
+    /// [`Self::git_dir_at`] reads the `.git` entry sitting at the work tree it
+    /// names, and only a work tree that points back at this common dir is
+    /// accepted. A backlink left behind by a work tree that has since moved,
+    /// been deleted, or been re-pointed at another repository resolves to
+    /// something else and falls through to `parent(git_common_dir)` — the
+    /// same answer as before, rather than a path that no longer holds this
+    /// repository. That round trip is also why a normal repository or a
+    /// submodule can't misfire here on a stray `gitdir` file.
+    fn separate_git_dir_work_tree(&self) -> Option<PathBuf> {
+        let work_tree = registration_worktree_path(&self.git_common_dir)?;
+        (Self::git_dir_at(&work_tree)? == self.git_common_dir).then_some(work_tree)
     }
 
     /// Access the bulk git config map, populating on first call.
